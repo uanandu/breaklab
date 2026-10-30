@@ -1,0 +1,28 @@
+# Tasks
+
+## 1. `internal/progress` package
+
+- [x] 1.1 Define `Attempt` and `ProgressFile` types matching the `progress.json` shape in `docs/breaklab-spec.md` (lab, variant, started_at, solved_at, failed_checks, hints_used, postmortem, status), plus `Load(path) (*ProgressFile, error)` (missing file returns `{Version: 1}`, no error; corrupt file errors) and `Save(path string, pf *ProgressFile) error` (atomic temp-file-plus-rename, mode `0644` per design.md Decision 8). Verify with unit tests for round-trip, missing file, and a corrupt file.
+- [x] 1.2 Implement `AppendActive(path, lab, variant string) (index int, err error)`, `MarkSolved(path string, index, hintsUsed int) error`, `MarkAbandoned(path string, index, hintsUsed int) error`, and `IncrementFailedChecks(path string, index int) error`, all idempotent against a non-`"active"` record per design.md Decision 6. Verify with unit tests: `AppendActive` returns the correct index and an `"active"` record with zeroed counters; `MarkSolved` sets status/solved_at/hints_used and a second call doesn't change `solved_at`; `MarkAbandoned` only overwrites a still-`"active"` record (leaves a `"solved"` one untouched); `IncrementFailedChecks` increments while active and no-ops once solved/abandoned.
+- [x] 1.3 Implement `StageCompletion(cat *catalog.Catalog, pf *ProgressFile) []StageStatus` (one entry per roadmap stage, `Completed`/`Total` lab counts; a lab counts as completed if any of its attempts has status `solved` or `complete`). Verify with a unit test using a small fixture catalog and a progress file with a mix of solved/active/abandoned attempts across two stages.
+- [x] 1.4 Implement `Streak(pf *ProgressFile, now time.Time) int` per design.md Decision 7 (local-calendar days, one day's grace for "today" having no activity yet). Verify with unit tests: no attempts → 0; solved only today → 1; solved only yesterday (nothing today) → 1; solved on three consecutive days ending yesterday → 3; a gap two days back stops the count there; all timestamps compared by local date, not UTC instant.
+
+## 2. `Session` and runner wiring
+
+- [x] 2.1 Add `AttemptIndex int` to `Session` (`internal/runner/session.go`) and remove `StartedAt` (design.md Decision 3). Update `TestSession` in `internal/runner/runner_test.go` to drop `StartedAt` and round-trip `AttemptIndex` instead. Verify the updated test passes.
+- [x] 2.2 Add `Runner.ProgressPath` (default `filepath.Join("progress", "progress.json")` in `New`). Change `launch` to take an `attemptIndex int` parameter and write it onto the saved `Session` (no `StartedAt`). Update `Reset` to pass `session.AttemptIndex` through unchanged. Verify existing `runner_test.go` tests that call `launch`/`Start`/`Reset` still pass once updated for the new signature (no behavior change yet — `Start` still needs 2.3 before it passes a real index).
+- [x] 2.3 Add a `Runner.finalizeAttempt(session *Session, status string) error` helper (idempotent per Decision 6) and wire it in: `Start` finalizes any previous session's attempt as `"abandoned"` before creating a new one via `progress.AppendActive`, in both the confirmed-switch branch and the same-lab-restart branch (design.md Decision 4); `Stop` finalizes the active attempt as `"abandoned"` before clearing the session. Verify with unit tests: switching labs marks the old attempt `"abandoned"`; restarting the same lab without `reset` marks the old attempt `"abandoned"`; `breaklab stop` while still active marks it `"abandoned"`; `breaklab stop` after a passing check leaves the attempt `"solved"` (not overwritten); `breaklab reset` never modifies `progress.json`.
+- [x] 2.4 Wire `Check` to call `progress.MarkSolved` (snapshotting `session.HintsUsed`) on a pass and `progress.IncrementFailedChecks` on a fail. Verify with unit tests: a passing check marks the record `"solved"` with the correct `hints_used` snapshot; a failing check increments `failed_checks`; checking again after already solved neither re-increments nor changes `solved_at`.
+
+## 3. `breaklab status`
+
+- [x] 3.1 Implement `Runner.Status(ctx) (StatusView, error)` (no Docker needed, matching `Hint`'s pattern): `Stages` from `progress.StageCompletion`, `Streak` from `progress.Streak`, and — only when a session is active — an `Active` block with the lab id, elapsed minutes computed from the attempt record's `started_at` (not `Session`, so resets don't reset the clock — design.md Decision 2), and hints used from `Session.HintsUsed` live (design.md Decision 5). Verify with unit tests: stage counts match a fixture, an active lab populates the `Active` block with correct elapsed/hints, and no active lab leaves it nil.
+- [x] 3.2 Add `breaklab status` to `cmd/breaklab/` and register it in `commands`/`commandOrder` in `cmd/breaklab/main.go`, printing per-stage completion, the active lab block (if any), and the streak. Verify with a CLI-level test asserting `breaklab status --help` exits 0 and is listed in `commandOrder`.
+- [x] 3.3 Verify by hand against a real lab: `breaklab start web-down`, fail a check, use a hint, solve it, run `breaklab status` and confirm the stage shows 1/1 (or however many web-down's stage has) complete and the streak shows 1; separately, start a lab and `breaklab stop` before solving, then confirm `breaklab status` still shows the stage as not complete for that lab.
+
+## Workflow follow-up
+
+- Run `gofmt -l` / `go vet` and the full `go test ./...` suite before archiving.
+- Run `openspec validate add-progress-tracking --strict` and fix any findings.
+- Confirm `progress/progress.json` is not gitignored and would be picked up by `git add`.
+- Archive the change with `/opsx:archive` once the above pass and the user has reviewed it.

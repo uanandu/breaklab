@@ -1,0 +1,30 @@
+# Tasks
+
+## 1. `internal/progress`: completing an attempt
+
+- [x] 1.1 Add `SetPostmortem(path string, index int, postmortemPath string) error` (unconditional write — design.md Decision 2) and `MarkComplete(path string, index int) error` (only transitions a `"solved"` record to `"complete"`, idempotent otherwise — design.md Decision 6). Verify with unit tests: `SetPostmortem` sets the field regardless of current status and leaves status unchanged; `MarkComplete` promotes a `"solved"` record and no-ops on `"active"`, `"abandoned"`, or an already-`"complete"` one.
+
+## 2. Template and section validation
+
+- [x] 2.1 Write `templates/postmortem.md` matching the "Lab format" / postmortem template in `docs/breaklab-spec.md`, with `text/template` placeholders for `lab`, `variant`, `stage`, `date`, `minutes_to_fix`, `hints_used`, and the `#` heading (the lab's title); `publish: false` is literal, never a placeholder. Verify by rendering it in a unit test (task 2.2) and checking the output's front matter and all five section headings.
+- [x] 2.2 In new `internal/postmortem/`, define `FrontMatter` (yaml-tagged: lab, variant, stage, date, minutes_to_fix, hints_used, publish) and `Render(templatePath string, fm FrontMatter, title string) (string, error)` using `text/template`. Verify with a unit test rendering against a temp copy of `templates/postmortem.md` and asserting the output contains the substituted values and the literal `publish: false`.
+- [x] 2.3 Implement `SplitFrontMatter(content string) (raw, body string, err error)` (parses the leading `---`-delimited block) and `ParseFrontMatter(raw string) (FrontMatter, error)` (`yaml.Unmarshal`). Verify with unit tests: a well-formed file splits and parses correctly; a file with no front matter errors clearly.
+- [x] 2.4 Implement `ValidateSections(body string) (failing []string)`: for each of Summary, Detection, Root cause, Fix, Prevention, extract the text between its `##` heading and the next one (or EOF), strip `<!-- ... -->` comments, and require 20+ remaining words; return the names of sections that don't. Verify with unit tests: a fully blank template (only placeholder comments) fails all five; a file with every section properly filled passes (empty result); a file missing one section's heading entirely also reports it as failing.
+
+## 3. Runner wiring
+
+- [x] 3.1 Add `Runner.TemplatePath` (default `filepath.Join("templates", "postmortem.md")`), `Runner.PostmortemsDir` (default `"postmortems"`), and `Runner.OpenEditor func(ctx context.Context, path string) error` (default: `strings.Fields(os.Getenv("EDITOR"))`, falling back to `["nano"]`, run via `exec.CommandContext` with stdio inherited — design.md Decision 7) to `internal/runner`.
+- [x] 3.2 Implement attempt selection: the latest (by `SolvedAt`) attempt with status `solved` or `complete` and an empty `Postmortem` (design.md Decision 1). Implement `Runner.Postmortem(ctx) (string, error)`: select an eligible attempt (error `"Solve a lab first"` if none — exact text per the spec scenario), look up its lab's `Stage` and `Title` from the catalog, compute the filename's date from the attempt's `SolvedAt` in local time (design.md Decision 3), append a `-2`, `-3`, ... suffix on a collision (design.md Decision 8), render the template, write the file (creating `postmortems/`), call `progress.SetPostmortem`, call `r.OpenEditor`, and return the created path. Verify with unit tests: creates the expected path and front matter for a solved attempt; a second call (same attempt already having a postmortem) either picks the next eligible attempt or errors "Solve a lab first" if none remain; a forced filename collision gets a `-2` suffix; `OpenEditor` is invoked with the created path.
+- [x] 3.3 Implement `Runner.ValidatePostmortem(ctx, path string) (ValidationResult, error)` (`ValidationResult{Valid bool; Failing []string}`): with `path == ""`, resolve to the latest-created postmortem (latest `SolvedAt` among attempts with a non-empty `Postmortem`, design.md Decision 4); with a path given, use it as-is. Read and split the file, run `ValidateSections`, and on success find the attempt whose `Postmortem` matches the resolved path and call `progress.MarkComplete` on it (design.md Decision 5). Verify with unit tests: a valid file with no path argument resolves correctly and promotes its attempt to `complete`; an invalid file returns the failing section names and does not promote; an explicit path argument validates and promotes that attempt even when it isn't the most recent; re-validating an already-`complete` file is a no-op, not an error.
+
+## 4. CLI command
+
+- [x] 4.1 Add `breaklab postmortem [--validate] [path]` to `cmd/breaklab/` and register it in `commands`/`commandOrder` in `cmd/breaklab/main.go`. Without `--validate`, reject a positional argument and call `Runner.Postmortem`, printing the created path. With `--validate`, call `Runner.ValidatePostmortem` with the optional path, printing each failing section (exit non-zero) or a confirmation that the postmortem is complete (exit 0). Verify with a CLI-level test asserting `breaklab postmortem --help` exits 0 and is listed in `commandOrder`.
+- [x] 4.2 Verify by hand against a real lab (set `EDITOR=true` so the postmortem command doesn't block on an interactive editor): solve `web-down`, run `breaklab postmortem` and confirm the created file's front matter and date; run `breaklab postmortem --validate` on the untouched template and confirm it lists all five sections as failing; fill in the five sections with real text, re-run `breaklab postmortem --validate`, confirm it passes, and confirm `progress.json`'s attempt is now `"complete"` (and `breaklab status`'s stage count, if checked, is unaffected since it already counted `solved`/`complete` the same way).
+
+## Workflow follow-up
+
+- Run `gofmt -l` / `go vet` and the full `go test ./...` suite before archiving.
+- Run `openspec validate add-postmortems --strict` and fix any findings.
+- Confirm `postmortems/` is not gitignored and `templates/postmortem.md` is tracked.
+- Archive the change with `/opsx:archive` once the above pass and the user has reviewed it.

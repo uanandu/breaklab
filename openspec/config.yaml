@@ -1,0 +1,75 @@
+schema: spec-driven
+
+context: |
+  Project: BreakLab, a personal break-fix DevOps training CLI.
+  One user. Labs are throwaway Docker containers that get broken on
+  purpose; the user fixes them and the CLI verifies the fix. Built to be
+  lightweight and fast enough to run well on a Raspberry Pi 5, and to be
+  reachable from another device on the user's home LAN when deployed
+  there headless.
+
+  Stack:
+  - Go (latest stable), one module, no other language runtime required
+  - CLI built with Go's standard flag/subcommand pattern (or a minimal
+    CLI library such as cobra if subcommand ergonomics need it)
+  - gopkg.in/yaml.v3 for lab and roadmap files
+  - html/template (Go stdlib) + HTMX for both the local web UI and the
+    public site; no SPA framework, no JS build step
+  - net/http (Go stdlib) for the local web UI; no separate app server
+  - Docker is driven by shelling out to the docker CLI via os/exec with
+    argument slices (never through a shell)
+  - go test for tests; gofmt + go vet (and golangci-lint if configured)
+    for lint and format
+  - Static site published to GitHub Pages by GitHub Actions
+  - Ships as a single statically-linked binary per platform (linux/amd64,
+    linux/arm64 for Raspberry Pi 5, darwin/arm64, windows/amd64)
+
+  Conventions:
+  - Source in cmd/breaklab/ (CLI entry) and internal/<concern>/, one
+    package per concern (catalog, docker, variants, runner, progress,
+    postmortem, site, web)
+  - Labs live in labs/<lab-id>/ and are data, not code: lab.yaml + scripts
+  - All lab scripts are Bash with `set -euo pipefail`
+  - Check scripts exit 0 when fixed, non-zero otherwise, and print one line
+  - Checks verify the outcome (symptom gone), never a specific fix
+  - User data: progress/progress.json and postmortems/*.md (committed)
+  - Session state: .breaklab/session.json (gitignored)
+  - The CLI must never print the active variant id until the lab is solved
+  - The local web UI must never serve variants/, solutions/, or an unused
+    hint's text through any route, the same rule as the CLI
+  - All docker and script invocations use os/exec with argument slices,
+    never a shell (sh -c) or a string-interpolated command
+  - Lab ids, variant ids, and any path built from them are validated
+    against ^[a-z0-9-]+$ before touching the filesystem or Docker
+  - Every command has a --help text and clear error messages
+  - Labs must work on Linux, macOS, and Windows via WSL2, and on a
+    Raspberry Pi 5 running Raspberry Pi OS or Ubuntu Server (64-bit)
+  - The local web UI's bind host defaults to 127.0.0.1 and is overridable
+    with `breaklab serve --host <addr>`; binding to any non-loopback
+    address prints a one-time warning that the server is unauthenticated
+    and reachable by any device on that network
+
+  Out of scope for v1: accounts, cloud VMs, Kubernetes labs, any
+  authentication for the local web UI (even when LAN-exposed).
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
