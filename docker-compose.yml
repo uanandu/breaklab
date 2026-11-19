@@ -1,7 +1,7 @@
 services:
   breaklab:
     build: .
-    image: breaklab
+    image: breaklab:latest
     ports:
       - "8787:8787"
     volumes:
